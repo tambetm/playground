@@ -1,6 +1,7 @@
 """The baseline Pommerman environment.
 
-This evironment acts as game manager for Pommerman. Further environments, such as in v1.py, will inherit from this.
+This evironment acts as game manager for Pommerman. Further environments,
+such as in v1.py, will inherit from this.
 """
 import json
 import os
@@ -12,9 +13,10 @@ from gym import spaces
 from gym.utils import seeding
 import gym
 
-from . import utility
-from ..characters import Bomb, Flame
-from ..utility import PommermanJSONEncoder as json_encoder
+from .. import characters
+from .. import constants
+from .. import forward_model
+from .. import utility
 
 
 class Pomme(gym.Env):
@@ -47,12 +49,13 @@ class Pomme(gym.Env):
         self._is_partially_observable = is_partially_observable
 
         self.training_agent = None
-        self.model = utility.ForwardModel()
+        self.model = forward_model.ForwardModel()
 
-        # Observation and Action Spaces. These are both geared towards a single agent even though the environment expects
-        # actions and returns observations for all four agents. We do this so that it's clear what the actions and obs are
-        # for a single agent. Wrt the observations, they are actually returned as a dict for easier understanding.
-
+        # Observation and Action Spaces. These are both geared towards a single
+        # agent even though the environment expects actions and returns
+        # observations for all four agents. We do this so that it's clear what
+        # the actions and obs are for a single agent. Wrt the observations,
+        # they are actually returned as a dict for easier understanding.
         self._set_action_space()
         self._set_observation_space()
 
@@ -67,15 +70,17 @@ class Pomme(gym.Env):
         - bomb blast strength (board_size^2).
         - bomb life (board_size^2)
         - agent's position (2)
-        - player ammo counts (4)
+        - player ammo counts (1)
         - blast strength (1)
         - can_kick (1)
         - teammate (one of {AgentDummy.value, Agent3.value}).
         - enemies (three of {AgentDummy.value, Agent3.value}).
         """
         bss = self._board_size**2
-        min_obs = [0]*3*bss + [0]*8 + [utility.Item.AgentDummy.value]*4
-        max_obs = [len(utility.Item)]*bss + [self._board_size]*bss + [25]*bss + [self._board_size]*2 + [self._num_items]*4 + [self._num_items] + [1] + [utility.Item.Agent3.value]*4
+        min_obs = [0]*3*bss + [0]*5 + [constants.Item.AgentDummy.value]*4
+        max_obs = [len(constants.Item)]*bss + [self._board_size]*bss + [25]*bss
+        max_obs += [self._board_size]*2 + [self._num_items]*2 + [1]
+        max_obs += [constants.Item.Agent3.value]*4
         self.observation_space = spaces.Box(np.array(min_obs), np.array(max_obs))
 
     def set_agents(self, agents):
@@ -167,20 +172,20 @@ class Pomme(gym.Env):
         return obs, reward, done, info
 
     def _render_frames(self):
-        agent_view_size = utility.AGENT_VIEW_SIZE
+        agent_view_size = constants.AGENT_VIEW_SIZE
         frames = []
 
         all_frame = np.zeros((self._board_size, self._board_size, 3))
-        num_items = len(utility.Item)
+        num_items = len(constants.Item)
         for row in range(self._board_size):
             for col in range(self._board_size):
                 value = self._board[row][col]
                 if utility.position_is_agent(self._board, (row, col)):
                     num_agent = value - num_items
                     if self._agents[num_agent].is_alive:
-                        all_frame[row][col] = utility.AGENT_COLORS[num_agent]
+                        all_frame[row][col] = constants.AGENT_COLORS[num_agent]
                 else:
-                    all_frame[row][col] = utility.ITEM_COLORS[value]
+                    all_frame[row][col] = constants.ITEM_COLORS[value]
 
         all_frame = np.array(all_frame)
         frames.append(all_frame)
@@ -194,22 +199,22 @@ class Pomme(gym.Env):
                             row >= r - agent_view_size, row < r + agent_view_size,
                             col >= c - agent_view_size, col < c + agent_view_size
                     ]):
-                        my_frame[r, c] = utility.ITEM_COLORS[utility.Item.Fog.value]
+                        my_frame[r, c] = constants.ITEM_COLORS[constants.Item.Fog.value]
             frames.append(my_frame)
 
         return frames
 
     def render(self, mode='human', close=False, record_pngs_dir=None, record_json_dir=None):
-        from PIL import Image
-
         if close:
             self.close()
             return
 
-        human_factor = utility.HUMAN_FACTOR
         frames = self._render_frames()
         if mode == 'rgb_array':
             return frames[0]
+
+        from PIL import Image
+        human_factor = constants.HUMAN_FACTOR
 
         all_img = resize(frames[0], (self._board_size*human_factor, self._board_size*human_factor), interp='nearest')
         other_imgs = [
@@ -223,7 +228,17 @@ class Pomme(gym.Env):
         if self._viewer is None:
             from gym.envs.classic_control import rendering
             self._viewer = rendering.SimpleImageViewer()
-        self._viewer.imshow(img)
+            self._viewer.imshow(img)
+
+            # Register all agents which need human input with Pyglet.
+            # This needs to be done here as the first `imshow` creates the window.
+            # Using `push_handlers` allows for easily creating agents that use other
+            # Pyglet inputs such as joystick, for example.
+            for agent in self._agents:
+                if agent.has_user_input():
+                    self._viewer.window.push_handlers(agent)
+        else:
+            self._viewer.imshow(img)
 
         if record_pngs_dir:
             Image.fromarray(img).save(os.path.join(record_pngs_dir, '%d.png' % self._step_count))
@@ -231,12 +246,6 @@ class Pomme(gym.Env):
             info = self.get_json_info()
             with open(os.path.join(record_json_dir, '%d.json' % self._step_count), 'w') as f:
                 f.write(json.dumps(info, sort_keys=True, indent=4))
-
-        for agent in self._agents:
-            if agent.has_key_input():
-                self._viewer.window.on_key_press = agent.on_key_press
-                self._viewer.window.on_key_release = agent.on_key_release
-                break
 
         time.sleep(1.0 / self._render_fps)
 
@@ -251,7 +260,8 @@ class Pomme(gym.Env):
     @staticmethod
     def featurize(obs):
         board = obs["board"].reshape(-1).astype(np.float32)
-        bomb_blast_strength = obs["bomb_blast_strength"].reshape(-1).astype(np.float32)
+        bomb_blast_strength = obs["bomb_blast_strength"].reshape(-1) \
+                                                        .astype(np.float32)
         bomb_life = obs["bomb_life"].reshape(-1).astype(np.float32)
         position = utility.make_np_float(obs["position"])
         ammo = utility.make_np_float([obs["ammo"]])
@@ -260,7 +270,9 @@ class Pomme(gym.Env):
 
         teammate = utility.make_np_float([obs["teammate"].value])
         enemies = utility.make_np_float([e.value for e in obs["enemies"]])
-        return np.concatenate((board, bomb_blast_strength, bomb_life, position, ammo, blast_strength, can_kick, teammate, enemies))
+        return np.concatenate((
+            board, bomb_blast_strength, bomb_life, position, ammo,
+            blast_strength, can_kick, teammate, enemies))
 
     def get_json_info(self):
         """Returns a json snapshot of the current game state."""
@@ -274,7 +286,7 @@ class Pomme(gym.Env):
                 'items': [[k, i] for k,i in self._items.items()]
             }
         for key, value in ret.items():
-            ret[key] = json.dumps(value, cls=json_encoder)
+            ret[key] = json.dumps(value, cls=utility.PommermanJSONEncoder)
         return ret
 
     def set_json_info(self):
@@ -283,7 +295,7 @@ class Pomme(gym.Env):
         self._board_size = int(self._init_game_state['board_size'])
 
         board_array = json.loads(self._init_game_state['board'])
-        self._board = np.ones((self._board_size, self._board_size)).astype(np.uint8) * utility.Item.Passage.value
+        self._board = np.ones((self._board_size, self._board_size)).astype(np.uint8) * constants.Item.Passage.value
         for x in range(self._board_size):
             for y in range(self._board_size):
                 self._board[x,y] = board_array[x][y]
@@ -295,17 +307,22 @@ class Pomme(gym.Env):
 
         agent_array = json.loads(self._init_game_state['agents'])
         for a in agent_array:
-            agent = next(x for x in self._agents if x.agent_id == a['agent_id'])
+            agent = next(x for x in self._agents \
+                         if x.agent_id == a['agent_id'])
             agent.set_start_position((a['position'][0], a['position'][1]))
-            agent.reset(int(a['ammo']), bool(a['is_alive']), int(a['blast_strength']), bool(a['can_kick']))
+            agent.reset(int(a['ammo']), bool(a['is_alive']),
+                        int(a['blast_strength']), bool(a['can_kick']))
 
         self._bombs = []
         bomb_array = json.loads(self._init_game_state['bombs'])
         for b in bomb_array:
-            bomber = next(x for x in self._agents if x.agent_id == b['bomber_id'])
-            self._bombs.append(Bomb(bomber, tuple(b['position']), int(b['life']), int(b['blast_strength']), utility.Action(b['moving_direction']) if b['moving_direction'] is not None else None))
+            bomber = next(x for x in self._agents \
+                          if x.agent_id == b['bomber_id'])
+            self._bombs.append(characters.Bomb(
+                bomber, tuple(b['position']), int(b['life']),
+                int(b['blast_strength']), utility.Action(b['moving_direction']) if b['moving_direction'] is not None else None))
 
         self._flames = []
         flameArray = json.loads(self._init_game_state['flames'])
         for f in flameArray:
-            self._flames.append(Flame(tuple(f['position']), f['life']))
+            self._flames.append(characters.Flame(tuple(f['position']), f['life']))
