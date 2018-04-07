@@ -320,7 +320,7 @@ class Pomme(gym.Env):
                           if x.agent_id == b['bomber_id'])
             self._bombs.append(characters.Bomb(
                 bomber, tuple(b['position']), int(b['life']),
-                int(b['blast_strength']), utility.Action(b['moving_direction']) if b['moving_direction'] is not None else None))
+                int(b['blast_strength']), constants.Action(b['moving_direction']) if b['moving_direction'] is not None else None))
 
         self._flames = []
         flameArray = json.loads(self._init_game_state['flames'])
